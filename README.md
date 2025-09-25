@@ -138,18 +138,6 @@ This project supports RGB-D experiments via the `RGBD_dataset.py` loader.
    model = MambaAlign(x_in_ch=1)
    ```
 
-2. **Normals precomputed from depth (3-channel auxiliary)**
-
-   * If you prefer to feed surface normals as the auxiliary modality, precompute normals from depth offline and store them as 3-channel images (or have your dataset produce them).
-   * Use `--aux_ch 3` (or `x_in_ch=3`) and ensure the dataset returns the normals under a consistent key (e.g., `"normals"`).
-   * The training/eval scripts in this repo accept common keys like `aux`, `p3d`, `normals`, `depth` — ensure your dataset and training loop agree on the key name.
-
-**Notes:**
-
-* `RGBD_dataset.py` handles common depth encodings (uint16 in mm, float meters, uint8 scaled). Set `depth_scale` appropriately for your data.
-* If your dataset stores normals as images, use the RealIAD style loader or a small wrapper to return normals as `(3,H,W)` tensors.
-* Synchronized geometric augmentations must be applied identically to RGB, depth/normals and masks.
-
 ---
 
 ## Training
@@ -218,14 +206,12 @@ python train.py \
   --use_amp
 ```
 
-> Note: If `train.py` does not include a `"rgbd"` branch, you can either add a small branch that instantiates `RGBDDataset` / the wrapper, or create a short script that builds the DataLoader and calls the training loop.
-
 Key flags:
 
 * `--aux_ch` — number of channels for the auxiliary modality: normals → `3`, depth/IR → `1`.
 * `--synth_prob` — probability to apply a synthetic anomaly per sample (default in `train.py`).
 * `--use_amp` — enable mixed precision (recommended).
-* `--pretrained_backbone` — use ImageNet-pretrained backbone weights (if available).
+* `--pretrained_backbone` — use ImageNet-pretrained backbone weights.
 
 See `train.py` header comments for loss terms, hyperparameters, and checkpoint settings.
 
@@ -259,14 +245,6 @@ Notes:
 * Image-level AUROC requires `scikit-learn`; otherwise it won’t be computed.
 
 ---
-
-## Implementation notes and customization points
-
-* `MambaAlign.py` — top-level model: adjust `x_in_ch`, PMM block counts, `fused_out_ch`, and CMI settings to change capacity.
-* `pmm_qsvss.py` — plug in optimized SSM/S4/S6 kernels if available; replace fallback implementations.
-* `alignment_aware_fusion.py` — tune `fused_out_ch`, bottleneck ratios, or replace `LocalFusion` blocks to change fusion behavior.
-* `RGBD_dataset.py` — default depth transform normalizes or returns meters; customize `transform_depth` to fit your sensor encoding.
-* `RealIAD_D3.py` — default normal transform maps common encodings to unit vectors; if your normals encoding differs, pass a custom `transform_normals` to the dataset.
 
 Performance tips:
 
