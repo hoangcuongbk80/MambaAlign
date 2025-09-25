@@ -32,7 +32,7 @@ MambaAlign/
 * Cross Mamba Interaction (CMI) — cross-conditioned recurrence between modalities at top-level features.
 * Alignment-Aware Fusion (AAF) — top-down multi-scale fusion robust to small spatial misalignments.
 * Decoder + heads: segmentation head (pixel map) and global image-level anomaly score.
-* Dataset loaders included for MulSen-AD and RealIAD-D³ (RealIAD loader converts pseudo-3D to per-pixel unit surface normals).
+* Dataset loaders included for MulSen-AD, RealIAD-D³ and generic RGB-D.
 * Training & evaluation scripts:
 
   * `train.py` — synthetic anomaly injection (image-space default), mixed precision, optimizer, scheduler, checkpointing.
@@ -73,7 +73,7 @@ For GPU, follow the PyTorch official install instructions: [https://pytorch.org]
 
 ### MulSen-AD
 
-Keep original repo directory structure. Example:
+Keep the original repo directory structure. Example:
 
 ```
 MulSen_AD/
@@ -102,6 +102,53 @@ from RealIAD_D3 import RealIAD_D3
 ds = RealIAD_D3(root="/path/to/RealIAD_D3", category="some_cat", split="train",
                 resize=(512,512), require_normals=True)
 ```
+
+### RGB-D
+
+This project supports RGB-D experiments via the `RGBD_dataset.py` loader.
+
+**Options when using RGB-D:**
+
+1. **Depth as single-channel auxiliary**
+
+   * Use depth directly as the auxiliary input.
+   * Set `--aux_ch 1` (or `x_in_ch=1` when constructing `MambaAlign`).
+   * Ensure `RGBD_dataset` is configured with the correct `depth_scale` and `max_depth` (if you normalize depth to `[0,1]`).
+   * Example dataset instantiation (in Python):
+
+   ```python
+   from RGBD_dataset import RGBDDataset
+   ds = RGBDDataset(
+       root="/path/to/RGBD",
+       category="some_cat",
+       split="train",
+       resize=(512,512),
+       depth_scale=1000.0,    # if depth stored as uint16 mm
+       max_depth=10.0,        # meters, for normalization
+       normalize_depth=True,
+       require_depth=True,
+       return_paths=True,
+   )
+   ```
+
+   Then create the model with `x_in_ch=1`:
+
+   ```python
+   from MambaAlign import MambaAlign
+   model = MambaAlign(x_in_ch=1)
+   ```
+
+2. **Normals precomputed from depth (3-channel auxiliary)**
+
+   * If you prefer to feed surface normals as the auxiliary modality, precompute normals from depth offline and store them as 3-channel images (or have your dataset produce them).
+   * Use `--aux_ch 3` (or `x_in_ch=3`) and ensure the dataset returns the normals under a consistent key (e.g., `"normals"`).
+   * The training/eval scripts in this repo accept common keys like `aux`, `p3d`, `normals`, `depth` — ensure your dataset and training loop agree on the key name.
+
+**Notes:**
+
+* `RGBD_dataset.py` handles common depth encodings (uint16 in mm, float meters, uint8 scaled). Set `depth_scale` appropriately for your data.
+* If your dataset stores normals as images, use the RealIAD style loader or a small wrapper to return normals as `(3,H,W)` tensors.
+* Synchronized geometric augmentations must be applied identically to RGB, depth/normals and masks.
 
 ---
 
@@ -141,14 +188,46 @@ python train.py \
   --pretrained_backbone
 ```
 
+**RGB-D (depth as aux)**
+
+```bash
+python train.py \
+  --data_root /path/to/RGBD \
+  --dataset rgbd \
+  --object some_cat \
+  --out_dir outputs/mamba_rgbd \
+  --epochs 200 \
+  --batch_size 8 \
+  --img_size 512 \
+  --aux_ch 1 \
+  --use_amp
+```
+
+**RGB-D (normals as aux, precomputed)**
+
+```bash
+python train.py \
+  --data_root /path/to/RGBD \
+  --dataset rgbd \
+  --object some_cat \
+  --out_dir outputs/mamba_rgbd_normals \
+  --epochs 200 \
+  --batch_size 8 \
+  --img_size 512 \
+  --aux_ch 3 \
+  --use_amp
+```
+
+> Note: If `train.py` does not include a `"rgbd"` branch, you can either add a small branch that instantiates `RGBDDataset` / the wrapper, or create a short script that builds the DataLoader and calls the training loop.
+
 Key flags:
 
-* `--aux_ch` — number of channels for auxiliary modality: normals → `3`, depth/IR → `1`.
+* `--aux_ch` — number of channels for the auxiliary modality: normals → `3`, depth/IR → `1`.
 * `--synth_prob` — probability to apply a synthetic anomaly per sample (default in `train.py`).
 * `--use_amp` — enable mixed precision (recommended).
 * `--pretrained_backbone` — use ImageNet-pretrained backbone weights (if available).
 
-See `train.py` top comments for loss terms, hyperparameters, and checkpoint settings.
+See `train.py` header comments for loss terms, hyperparameters, and checkpoint settings.
 
 ---
 
@@ -168,7 +247,7 @@ python eval.py \
   --save_vis
 ```
 
-Outputs:
+For RGB-D specify proper `--dataset` / dataset loader and `--aux_ch` (1 for depth, 3 for normals). The script outputs:
 
 * `eval_results.csv` — per-image scores and pixel metrics (when GT exists).
 * `vis/heatmaps/` and `vis/overlays/` — saved visualizations when `--save_vis` is provided.
@@ -186,6 +265,7 @@ Notes:
 * `MambaAlign.py` — top-level model: adjust `x_in_ch`, PMM block counts, `fused_out_ch`, and CMI settings to change capacity.
 * `pmm_qsvss.py` — plug in optimized SSM/S4/S6 kernels if available; replace fallback implementations.
 * `alignment_aware_fusion.py` — tune `fused_out_ch`, bottleneck ratios, or replace `LocalFusion` blocks to change fusion behavior.
+* `RGBD_dataset.py` — default depth transform normalizes or returns meters; customize `transform_depth` to fit your sensor encoding.
 * `RealIAD_D3.py` — default normal transform maps common encodings to unit vectors; if your normals encoding differs, pass a custom `transform_normals` to the dataset.
 
 Performance tips:
@@ -200,6 +280,6 @@ Performance tips:
 
 * If the dataset loader cannot find your modality directories, check folder names and pass directory-name candidates (many dataset loaders accept name variations).
 * If checkpoints won't load because keys mismatch, inspect the checkpoint dict: training script stores `ckpt["model"] = model.state_dict()`. `eval.py` accepts both raw `state_dict` and dict-wrapped checkpoints.
-* If you see unstable results when training with very small batches, change BatchNorm -> GroupNorm in key modules.
+* If you see unstable results when training with very small batches, change BatchNorm → GroupNorm in key modules.
 
 ---
